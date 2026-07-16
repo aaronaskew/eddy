@@ -8,52 +8,50 @@ use std::io::{StdoutLock, Write};
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
 enum Payload {
+    Generate,
+    GenerateOk {
+        #[serde(rename = "id")]
+        guid: String,
+    },
     Init {
         node_id: String,
         node_ids: Vec<String>,
     },
     InitOk,
-    Echo {
-        echo: String,
-    },
-    EchoOk {
-        echo: String,
-    },
 }
 
-struct EchoNode {
-    id: usize,
+struct UniqueNode {
+    msg_id: usize,
 }
 
-impl Node<Payload> for EchoNode {
+impl Node<Payload> for UniqueNode {
     fn step(&mut self, input: Message<Payload>, output: &mut StdoutLock) -> anyhow::Result<()> {
         match input.body.payload {
             Payload::Init { .. } => {
-                // self.node_id = node_id;
-                // self.node_ids = node_ids;
-
                 let reply = Message {
                     src: input.dst,
                     dst: input.src,
                     body: Body {
-                        msg_id: Some(self.id),
+                        msg_id: Some(self.msg_id),
                         in_reply_to: input.body.msg_id,
                         payload: Payload::InitOk,
                     },
                 };
 
                 serde_json::to_writer(&mut *output, &reply)
-                    .context("serialize response to echo")?;
+                    .context("serialize response to generate")?;
                 output.write_all(b"\n").context("add newline")?;
             }
-            Payload::Echo { echo } => {
+            Payload::Generate => {
+                let guid = ulid::Ulid::generate().to_string();
+
                 let reply = Message {
                     src: input.dst,
                     dst: input.src,
                     body: Body {
-                        msg_id: Some(self.id),
+                        msg_id: Some(self.msg_id),
                         in_reply_to: input.body.msg_id,
-                        payload: Payload::EchoOk { echo },
+                        payload: Payload::GenerateOk { guid },
                     },
                 };
 
@@ -62,14 +60,14 @@ impl Node<Payload> for EchoNode {
                 output.write_all(b"\n").context("add newline")?;
             }
             Payload::InitOk => bail!("received init_ok message"),
-            Payload::EchoOk { .. } => {}
+            Payload::GenerateOk { .. } => {}
         }
 
-        self.id += 1;
+        self.msg_id += 1;
         Ok(())
     }
 }
 
 fn main() -> anyhow::Result<()> {
-    main_loop(EchoNode { id: 0 })
+    main_loop(UniqueNode { msg_id: 0 })
 }

@@ -12,8 +12,7 @@ pub struct Message<Payload> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Body<Payload> {
-    #[serde(rename = "msg_id")]
-    pub id: Option<usize>,
+    pub msg_id: Option<usize>,
     pub in_reply_to: Option<usize>,
     #[serde(flatten)]
     pub payload: Payload,
