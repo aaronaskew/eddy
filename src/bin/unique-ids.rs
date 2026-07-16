@@ -7,34 +7,62 @@ use std::io::{StdoutLock, Write};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
-enum Payload {
+enum UniquePayload {
     Generate,
     GenerateOk {
         #[serde(rename = "id")]
         guid: String,
     },
-    Init {
-        node_id: String,
-        node_ids: Vec<String>,
-    },
+    Init(eddy::Init),
     InitOk,
 }
 
+impl Payload for UniquePayload {
+    fn extract_init(input: Self) -> Option<Init> {
+        if let Self::Init(init) = input {
+            return Some(init);
+        }
+
+        None
+    }
+
+    fn gen_init_ok() -> Self {
+        Self::InitOk
+    }
+}
+
 struct UniqueNode {
+    node_id: String,
     msg_id: usize,
 }
 
-impl Node<Payload> for UniqueNode {
-    fn step(&mut self, input: Message<Payload>, output: &mut StdoutLock) -> anyhow::Result<()> {
+impl Node<Self, UniquePayload> for UniqueNode {
+    fn from_init(state: Self, init: Init) -> anyhow::Result<Self>
+    where
+        Self: Sized,
+    {
+        Ok(Self {
+            node_id: init.node_id,
+            msg_id: state.msg_id,
+        })
+    }
+
+    fn step(
+        &mut self,
+        input: Message<UniquePayload>,
+        output: &mut StdoutLock,
+    ) -> anyhow::Result<()> {
         match input.body.payload {
-            Payload::Init { .. } => {
+            UniquePayload::Init(init) => {
+                self.node_id = init.node_id;
+
                 let reply = Message {
                     src: input.dst,
                     dst: input.src,
                     body: Body {
                         msg_id: Some(self.msg_id),
                         in_reply_to: input.body.msg_id,
-                        payload: Payload::InitOk,
+                        payload: UniquePayload::InitOk,
                     },
                 };
 
@@ -42,8 +70,8 @@ impl Node<Payload> for UniqueNode {
                     .context("serialize response to generate")?;
                 output.write_all(b"\n").context("add newline")?;
             }
-            Payload::Generate => {
-                let guid = ulid::Ulid::generate().to_string();
+            UniquePayload::Generate => {
+                let guid = format!("{}-{}", self.node_id, self.msg_id);
 
                 let reply = Message {
                     src: input.dst,
@@ -51,7 +79,7 @@ impl Node<Payload> for UniqueNode {
                     body: Body {
                         msg_id: Some(self.msg_id),
                         in_reply_to: input.body.msg_id,
-                        payload: Payload::GenerateOk { guid },
+                        payload: UniquePayload::GenerateOk { guid },
                     },
                 };
 
@@ -59,8 +87,8 @@ impl Node<Payload> for UniqueNode {
                     .context("serialize response to echo")?;
                 output.write_all(b"\n").context("add newline")?;
             }
-            Payload::InitOk => bail!("received init_ok message"),
-            Payload::GenerateOk { .. } => {}
+            UniquePayload::InitOk => bail!("received init_ok message"),
+            UniquePayload::GenerateOk { .. } => {}
         }
 
         self.msg_id += 1;
@@ -69,5 +97,8 @@ impl Node<Payload> for UniqueNode {
 }
 
 fn main() -> anyhow::Result<()> {
-    main_loop(UniqueNode { msg_id: 0 })
+    main_loop::<UniqueNode, UniqueNode, _>(UniqueNode {
+        msg_id: 1,
+        node_id: String::new(),
+    })
 }
