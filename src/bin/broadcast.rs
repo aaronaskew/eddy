@@ -3,7 +3,7 @@ use eddy::*;
 use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, BTreeSet},
     io::{StdoutLock, Write},
 };
 
@@ -17,7 +17,7 @@ enum BroadcastPayload {
     BroadcastOk,
     Read,
     ReadOk {
-        messages: HashSet<usize>,
+        messages: BTreeSet<usize>,
     },
     Topology {
         topology: HashMap<String, Vec<String>>,
@@ -46,7 +46,7 @@ struct BroadcastNode {
     node_id: String,
     node_ids: Vec<String>,
     msg_id: usize,
-    messages: HashSet<usize>,
+    messages: BTreeSet<usize>,
     topology: HashMap<String, Vec<String>>,
 }
 
@@ -185,7 +185,7 @@ fn main() -> anyhow::Result<()> {
         node_id: String::new(),
         node_ids: vec![],
         msg_id: 1,
-        messages: HashSet::new(),
+        messages: BTreeSet::new(),
         topology: HashMap::new(),
     };
 
