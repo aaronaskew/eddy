@@ -3,7 +3,7 @@ use eddy::*;
 use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::{StdoutLock, Write},
 };
 
@@ -17,7 +17,7 @@ enum BroadcastPayload {
     BroadcastOk,
     Read,
     ReadOk {
-        messages: Vec<usize>,
+        messages: HashSet<usize>,
     },
     Topology {
         topology: HashMap<String, Vec<String>>,
@@ -46,7 +46,7 @@ struct BroadcastNode {
     node_id: String,
     node_ids: Vec<String>,
     msg_id: usize,
-    messages: Vec<usize>,
+    messages: HashSet<usize>,
     topology: HashMap<String, Vec<String>>,
 }
 
@@ -91,24 +91,33 @@ impl Node<Self, BroadcastPayload> for BroadcastNode {
 
             BroadcastPayload::InitOk => bail!("received init_ok message"),
             BroadcastPayload::Broadcast { message } => {
-                self.messages.push(message);
+                let is_new_message = self.messages.insert(message);
 
-                for dest_node_id in self.node_ids.iter().filter(|&id| id != &self.node_id) {
-                    let broadcast_msg = Message {
-                        src: self.node_id.clone(),
-                        dst: dest_node_id.clone(),
-                        body: Body {
-                            msg_id: Some(self.msg_id),
-                            in_reply_to: None,
-                            payload: BroadcastPayload::Broadcast { message },
-                        },
-                    };
+                // Only broadcast message out if it is the first time we've seen it.
+                if is_new_message {
+                    for dest_node_id in self
+                        .topology
+                        .get(&self.node_id)
+                        .expect("topology should contain an entry for this node")
+                        .iter()
+                        .filter(|id| self.node_ids.contains(id) && **id != input.src)
+                    {
+                        let broadcast_msg = Message {
+                            src: self.node_id.clone(),
+                            dst: dest_node_id.clone(),
+                            body: Body {
+                                msg_id: Some(self.msg_id),
+                                in_reply_to: None,
+                                payload: BroadcastPayload::Broadcast { message },
+                            },
+                        };
 
-                    serde_json::to_writer(&mut *output, &broadcast_msg)
-                        .context("serialize message to broadcast")?;
-                    output.write_all(b"\n").context("add newline")?;
+                        serde_json::to_writer(&mut *output, &broadcast_msg)
+                            .context("serialize message to broadcast")?;
+                        output.write_all(b"\n").context("add newline")?;
 
-                    self.msg_id += 1;
+                        self.msg_id += 1;
+                    }
                 }
 
                 let broadcast_ok_msg = Message {
@@ -145,7 +154,6 @@ impl Node<Self, BroadcastPayload> for BroadcastNode {
             }
             BroadcastPayload::ReadOk { .. } => {}
             BroadcastPayload::Topology { topology } => {
-                // TODO: Implement topology logic, just store for now
                 self.topology = topology;
 
                 let reply = Message {
@@ -177,7 +185,7 @@ fn main() -> anyhow::Result<()> {
         node_id: String::new(),
         node_ids: vec![],
         msg_id: 1,
-        messages: vec![],
+        messages: HashSet::new(),
         topology: HashMap::new(),
     };
 
