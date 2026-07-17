@@ -39,7 +39,7 @@ pub trait Node<S, Payload> {
 
 pub fn main_loop<S, N, P>(init_state: S) -> anyhow::Result<()>
 where
-    P: Payload + DeserializeOwned + Serialize,
+    P: Payload + DeserializeOwned + Serialize + std::fmt::Debug,
     N: Node<S, P>,
 {
     let stdin = std::io::stdin().lock();
@@ -70,6 +70,7 @@ where
 
     for input in inputs {
         let input = input.context("Maelstrom input from STDIN could not be deserialized")?;
+
         node.step(input, &mut stdout)
             .context("Node step function failed")?;
     }

@@ -44,7 +44,7 @@ impl Node<Self, EchoPayload> for EchoNode {
 
     fn step(&mut self, input: Message<EchoPayload>, output: &mut StdoutLock) -> anyhow::Result<()> {
         match input.body.payload {
-            EchoPayload::Init { .. } => {
+            EchoPayload::Init(_init) => {
                 let reply = Message {
                     src: input.dst,
                     dst: input.src,
