@@ -3,7 +3,7 @@ use eddy::*;
 use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, BTreeSet},
+    collections::{BTreeSet, HashMap},
     io::{StdoutLock, Write},
 };
 
@@ -23,22 +23,6 @@ enum BroadcastPayload {
         topology: HashMap<String, Vec<String>>,
     },
     TopologyOk,
-    Init(eddy::Init),
-    InitOk,
-}
-
-impl Payload for BroadcastPayload {
-    fn extract_init(input: Self) -> Option<Init> {
-        if let Self::Init(init) = input {
-            return Some(init);
-        }
-
-        None
-    }
-
-    fn gen_init_ok() -> Self {
-        Self::InitOk
-    }
 }
 
 #[derive(Debug)]
@@ -71,25 +55,6 @@ impl Node<Self, BroadcastPayload> for BroadcastNode {
         output: &mut StdoutLock,
     ) -> anyhow::Result<()> {
         match input.body.payload {
-            BroadcastPayload::Init(init) => {
-                self.node_id = init.node_id;
-
-                let reply = Message {
-                    src: input.dst,
-                    dst: input.src,
-                    body: Body {
-                        msg_id: Some(self.msg_id),
-                        in_reply_to: input.body.msg_id,
-                        payload: BroadcastPayload::InitOk,
-                    },
-                };
-
-                serde_json::to_writer(&mut *output, &reply)
-                    .context("serialize response to generate")?;
-                output.write_all(b"\n").context("add newline")?;
-            }
-
-            BroadcastPayload::InitOk => bail!("received init_ok message"),
             BroadcastPayload::Broadcast { message } => {
                 let is_new_message = self.messages.insert(message);
 
