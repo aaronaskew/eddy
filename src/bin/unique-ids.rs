@@ -33,20 +33,13 @@ impl Node<(), UniquePayload> for UniqueNode {
         input: Message<UniquePayload>,
         output: &mut StdoutLock,
     ) -> anyhow::Result<()> {
-        match input.body.payload {
+        let mut reply = input.into_reply(Some(&mut self.msg_id));
+
+        match reply.body.payload {
             UniquePayload::Generate => {
                 let guid = format!("{}-{}", self.node_id, self.msg_id);
 
-                let reply = Message {
-                    src: input.dst,
-                    dst: input.src,
-                    body: Body {
-                        msg_id: Some(self.msg_id),
-                        in_reply_to: input.body.msg_id,
-                        payload: UniquePayload::GenerateOk { guid },
-                    },
-                };
-
+                reply.body.payload = UniquePayload::GenerateOk { guid };
                 serde_json::to_writer(&mut *output, &reply)
                     .context("serialize response to echo")?;
                 output.write_all(b"\n").context("add newline")?;
@@ -56,6 +49,7 @@ impl Node<(), UniquePayload> for UniqueNode {
         }
 
         self.msg_id += 1;
+
         Ok(())
     }
 }
