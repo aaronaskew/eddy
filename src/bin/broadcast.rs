@@ -85,26 +85,46 @@ impl Node<(), BroadcastPayload, InjectedPayload> for BroadcastNode {
             Event::EOF => {}
             Event::Injected(payload) => match payload {
                 InjectedPayload::Gossip => {
+                    eprintln!(
+                        "begin gossip event to neighborhood: {:?}",
+                        self.neighborhood
+                    );
                     for n in &self.neighborhood {
-                        Message {
-                            src: self.node_id.clone(),
-                            dst: n.clone(),
-                            body: Body {
-                                msg_id: None,
-                                in_reply_to: None,
-                                payload: BroadcastPayload::Gossip {
-                                    seen: self
-                                        .messages
-                                        .iter()
-                                        .copied()
-                                        .filter(|message| !self.known[n].contains(message))
-                                        .collect(),
+                        let known_by_n = &self.known[n];
+
+                        if self.messages.is_empty() || self.messages == *known_by_n {
+                            eprintln!(
+                                "not sending gossip message to {} because we have nothing new to send",
+                                n,
+                            );
+                        } else {
+                            let pruned_messages = self
+                                .messages
+                                .iter()
+                                .copied()
+                                .filter(|message| !self.known[n].contains(message))
+                                .collect();
+
+                            eprintln!(
+                                "sending gossip message to {} which knows {:?}\n we know {:?}\n so sending {:?}",
+                                n, known_by_n, self.messages, pruned_messages
+                            );
+
+                            Message {
+                                src: self.node_id.clone(),
+                                dst: n.clone(),
+                                body: Body {
+                                    msg_id: None,
+                                    in_reply_to: None,
+                                    payload: BroadcastPayload::Gossip {
+                                        seen: pruned_messages,
+                                    },
                                 },
-                            },
+                            }
+                            .send(output)
+                            .with_context(|| format!("gossip to {}", n))?;
+                            self.msg_id += 1;
                         }
-                        .send(output)
-                        .with_context(|| format!("gossip to {}", n))?;
-                        self.msg_id += 1;
                     }
                 }
             },
@@ -112,7 +132,14 @@ impl Node<(), BroadcastPayload, InjectedPayload> for BroadcastNode {
                 let mut reply = message.into_reply(Some(&mut self.msg_id));
                 match reply.body.payload {
                     BroadcastPayload::Gossip { seen } => {
+                        eprintln!("RECEIVED GOSSIP from {} messages: {:?}", reply.dst, seen);
+                        eprintln!("OUR messages before: {:?}", self.messages);
+                        self.known
+                            .get_mut(&reply.dst)
+                            .expect("got gossip from unknown node")
+                            .extend(seen.iter().copied());
                         self.messages.extend(seen);
+                        eprintln!("OUR messages after: {:?}", self.messages);
                     }
                     BroadcastPayload::Broadcast { message } => {
                         self.messages.insert(message);
