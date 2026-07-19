@@ -4,7 +4,8 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeSet, HashMap},
-    io::{StdoutLock, Write},
+    io::StdoutLock,
+    time::Duration,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,6 +24,13 @@ enum BroadcastPayload {
         topology: HashMap<String, Vec<String>>,
     },
     TopologyOk,
+    Gossip {
+        seen: BTreeSet<usize>,
+    },
+}
+
+enum InjectedPayload {
+    Gossip,
 }
 
 #[derive(Debug)]
@@ -30,56 +38,94 @@ struct BroadcastNode {
     node_id: String,
     msg_id: usize,
     messages: BTreeSet<usize>,
-    _known: HashMap<String, BTreeSet<usize>>,
-    _msg_communicated: HashMap<usize, BTreeSet<usize>>,
+    known: HashMap<String, BTreeSet<usize>>,
     neighborhood: Vec<String>,
 }
 
-impl Node<(), BroadcastPayload> for BroadcastNode {
+impl Node<(), BroadcastPayload, InjectedPayload> for BroadcastNode {
     fn from_init(
         _state: (),
         init: Init,
-        _tx: std::sync::mpsc::Sender<Event<BroadcastPayload>>,
+        tx: std::sync::mpsc::Sender<Event<BroadcastPayload, InjectedPayload>>,
     ) -> anyhow::Result<Self> {
+        let gossip_tx = tx.clone();
+        std::thread::spawn(move || {
+            // generate gossip events
+            // TODO: handle EOF signal
+            loop {
+                std::thread::sleep(Duration::from_millis(300));
+                if gossip_tx
+                    .send(Event::Injected(InjectedPayload::Gossip))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+
         Ok(Self {
             node_id: init.node_id,
             msg_id: 1,
             messages: BTreeSet::new(),
-            _known: init
+            known: init
                 .node_ids
                 .into_iter()
                 .map(|node_id| (node_id, BTreeSet::new()))
                 .collect(),
-            _msg_communicated: HashMap::new(),
             neighborhood: vec![],
         })
     }
 
     fn step(
         &mut self,
-        input: Event<BroadcastPayload>,
+        input: Event<BroadcastPayload, InjectedPayload>,
         output: &mut StdoutLock,
     ) -> anyhow::Result<()> {
         match input {
+            Event::EOF => {}
+            Event::Injected(payload) => match payload {
+                InjectedPayload::Gossip => {
+                    for n in &self.neighborhood {
+                        Message {
+                            src: self.node_id.clone(),
+                            dst: n.clone(),
+                            body: Body {
+                                msg_id: None,
+                                in_reply_to: None,
+                                payload: BroadcastPayload::Gossip {
+                                    seen: self
+                                        .messages
+                                        .iter()
+                                        .copied()
+                                        .filter(|message| !self.known[n].contains(message))
+                                        .collect(),
+                                },
+                            },
+                        }
+                        .send(output)
+                        .with_context(|| format!("gossip to {}", n))?;
+                        self.msg_id += 1;
+                    }
+                }
+            },
             Event::Message(message) => {
                 let mut reply = message.into_reply(Some(&mut self.msg_id));
                 match reply.body.payload {
+                    BroadcastPayload::Gossip { seen } => {
+                        self.messages.extend(seen);
+                    }
                     BroadcastPayload::Broadcast { message } => {
                         self.messages.insert(message);
 
                         reply.body.payload = BroadcastPayload::BroadcastOk;
-                        serde_json::to_writer(&mut *output, &reply)
-                            .context("serialize message to broadcast")?;
-                        output.write_all(b"\n").context("add newline")?;
+                        reply.send(output).context("reply to broadcast")?;
                     }
 
                     BroadcastPayload::Read => {
                         reply.body.payload = BroadcastPayload::ReadOk {
                             messages: self.messages.clone(),
                         };
-                        serde_json::to_writer(&mut *output, &reply)
-                            .context("serialize response to read")?;
-                        output.write_all(b"\n").context("add newline")?;
+                        reply.send(output).context("reply to read")?;
                     }
 
                     BroadcastPayload::Topology { mut topology } => {
@@ -88,16 +134,13 @@ impl Node<(), BroadcastPayload> for BroadcastNode {
                         });
 
                         reply.body.payload = BroadcastPayload::TopologyOk;
-                        serde_json::to_writer(&mut *output, &reply)
-                            .context("serialize response to topology")?;
-                        output.write_all(b"\n").context("add newline")?;
+                        reply.send(output).context("reply to topology")?;
                     }
                     BroadcastPayload::BroadcastOk
                     | BroadcastPayload::ReadOk { .. }
                     | BroadcastPayload::TopologyOk => {}
                 }
             }
-            Event::Injected(_) => {}
         }
 
         Ok(())
@@ -105,5 +148,5 @@ impl Node<(), BroadcastPayload> for BroadcastNode {
 }
 
 fn main() -> anyhow::Result<()> {
-    main_loop::<_, BroadcastNode, _>(())
+    main_loop::<_, BroadcastNode, _, _>(())
 }

@@ -26,12 +26,23 @@ impl<Payload> Message<Payload> {
             },
         }
     }
+
+    pub fn send(&self, output: &mut impl Write) -> anyhow::Result<()>
+    where
+        Payload: Serialize,
+    {
+        serde_json::to_writer(&mut *output, self).context("serialize response message")?;
+        output.write_all(b"\n").context("trailing newline")?;
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
-pub enum Event<Payload> {
+pub enum Event<Payload, InjectedPayload = ()> {
     Message(Message<Payload>),
-    Injected(Payload),
+    Injected(InjectedPayload),
+    EOF,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,22 +67,27 @@ pub struct Init {
     pub node_ids: Vec<String>,
 }
 
-pub trait Node<S, Payload> {
+pub trait Node<S, Payload, InjectedPayload = ()> {
     fn from_init(
         state: S,
         init: Init,
-        inject: std::sync::mpsc::Sender<Event<Payload>>,
+        inject: std::sync::mpsc::Sender<Event<Payload, InjectedPayload>>,
     ) -> anyhow::Result<Self>
     where
         Self: Sized;
 
-    fn step(&mut self, input: Event<Payload>, output: &mut StdoutLock) -> anyhow::Result<()>;
+    fn step(
+        &mut self,
+        input: Event<Payload, InjectedPayload>,
+        output: &mut StdoutLock,
+    ) -> anyhow::Result<()>;
 }
 
-pub fn main_loop<S, N, P>(init_state: S) -> anyhow::Result<()>
+pub fn main_loop<S, N, P, IP>(init_state: S) -> anyhow::Result<()>
 where
     P: DeserializeOwned + Send + 'static,
-    N: Node<S, P>,
+    N: Node<S, P, IP>,
+    IP: Send + 'static,
 {
     let (tx, rx) = std::sync::mpsc::channel();
 
@@ -118,6 +134,8 @@ where
                 return Ok::<_, anyhow::Error>(());
             }
         }
+
+        let _ = tx.send(Event::EOF);
 
         Ok(())
     });

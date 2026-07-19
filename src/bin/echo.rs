@@ -48,5 +48,5 @@ impl Node<(), EchoPayload> for EchoNode {
 }
 
 fn main() -> anyhow::Result<()> {
-    main_loop::<_, EchoNode, _>(())
+    main_loop::<_, EchoNode, _, _>(())
 }
