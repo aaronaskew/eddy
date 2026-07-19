@@ -35,8 +35,6 @@ impl Node<(), EchoPayload> for EchoNode {
             EchoPayload::EchoOk { .. } => {}
         }
 
-        self.msg_id += 1;
-
         Ok(())
     }
 }

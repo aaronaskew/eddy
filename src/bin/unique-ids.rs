@@ -48,8 +48,6 @@ impl Node<(), UniquePayload> for UniqueNode {
             UniquePayload::GenerateOk { .. } => {}
         }
 
-        self.msg_id += 1;
-
         Ok(())
     }
 }

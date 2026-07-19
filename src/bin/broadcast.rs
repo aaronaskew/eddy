@@ -87,7 +87,6 @@ impl Node<Self, BroadcastPayload> for BroadcastNode {
             | BroadcastPayload::TopologyOk => {}
         }
 
-        self.msg_id += 1;
         Ok(())
     }
 }
