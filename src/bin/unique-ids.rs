@@ -21,19 +21,23 @@ struct UniqueNode {
 }
 
 impl Node<(), UniquePayload> for UniqueNode {
-    fn from_init(_state: (), init: Init) -> anyhow::Result<Self> {
+    fn from_init(
+        _state: (),
+        init: Init,
+        _tx: std::sync::mpsc::Sender<Event<UniquePayload>>,
+    ) -> anyhow::Result<Self> {
         Ok(Self {
             node_id: init.node_id,
             msg_id: 1,
         })
     }
 
-    fn step(
-        &mut self,
-        input: Message<UniquePayload>,
-        output: &mut StdoutLock,
-    ) -> anyhow::Result<()> {
-        let mut reply = input.into_reply(Some(&mut self.msg_id));
+    fn step(&mut self, input: Event<UniquePayload>, output: &mut StdoutLock) -> anyhow::Result<()> {
+        let Event::Message(message) = input else {
+            panic!("got injected event when there is no event injection");
+        };
+
+        let mut reply = message.into_reply(Some(&mut self.msg_id));
 
         match reply.body.payload {
             UniquePayload::Generate => {

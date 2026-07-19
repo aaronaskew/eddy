@@ -17,12 +17,20 @@ struct EchoNode {
 }
 
 impl Node<(), EchoPayload> for EchoNode {
-    fn from_init(_state: (), _init: eddy::Init) -> anyhow::Result<Self> {
+    fn from_init(
+        _state: (),
+        _init: Init,
+        _tx: std::sync::mpsc::Sender<Event<EchoPayload>>,
+    ) -> anyhow::Result<Self> {
         Ok(Self { msg_id: 1 })
     }
 
-    fn step(&mut self, input: Message<EchoPayload>, output: &mut StdoutLock) -> anyhow::Result<()> {
-        let mut reply = input.into_reply(Some(&mut self.msg_id));
+    fn step(&mut self, input: Event<EchoPayload>, output: &mut StdoutLock) -> anyhow::Result<()> {
+        let Event::Message(message) = input else {
+            panic!("got injected event when there is no event injection");
+        };
+
+        let mut reply = message.into_reply(Some(&mut self.msg_id));
 
         match reply.body.payload {
             EchoPayload::Echo { echo } => {
