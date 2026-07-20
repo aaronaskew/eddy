@@ -2,7 +2,7 @@ use eddy::*;
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
-use std::io::{StdoutLock, Write};
+use std::io::StdoutLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -30,14 +30,14 @@ impl Node<(), EchoPayload> for EchoNode {
             panic!("got injected event when there is no event injection");
         };
 
-        let mut reply = message.into_reply(Some(&mut self.msg_id));
+        let mut reply = message.into_reply(&self.msg_id);
 
         match reply.body.payload {
             EchoPayload::Echo { echo } => {
                 reply.body.payload = EchoPayload::EchoOk { echo };
-                serde_json::to_writer(&mut *output, &reply)
-                    .context("serialize response to echo")?;
-                output.write_all(b"\n").context("add newline")?;
+                reply
+                    .send(output, &mut self.msg_id)
+                    .context("reply to echo")?;
             }
 
             EchoPayload::EchoOk { .. } => {}

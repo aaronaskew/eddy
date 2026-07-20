@@ -8,7 +8,6 @@ use std::{
     time::Duration,
 };
 
-const ADDITIONAL_MSG_PERCENTAGE: f32 = 1.0;
 const GOSSIP_SLEEP_MS: u64 = 300;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,7 +38,7 @@ enum InjectedPayload {
 #[derive(Debug)]
 struct BroadcastNode {
     node_id: String,
-    node_ids: Vec<String>,
+    _node_ids: Vec<String>,
     msg_id: usize,
     messages: BTreeSet<usize>,
     known: HashMap<String, BTreeSet<usize>>,
@@ -69,7 +68,7 @@ impl Node<(), BroadcastPayload, InjectedPayload> for BroadcastNode {
 
         Ok(Self {
             node_id: init.node_id,
-            node_ids: init.node_ids.clone(),
+            _node_ids: init.node_ids.clone(),
             msg_id: 1,
             messages: BTreeSet::new(),
             known: init
@@ -93,46 +92,34 @@ impl Node<(), BroadcastPayload, InjectedPayload> for BroadcastNode {
                     for n in &self.neighborhood {
                         let known_by_n = &self.known[n];
 
-                        let (already_known_by_n, mut notify_of): (BTreeSet<_>, BTreeSet<_>) = self
+                        let notify_of: BTreeSet<_> = self
                             .messages
                             .iter()
+                            .filter(|m| !known_by_n.contains(m))
                             .copied()
-                            .partition(|message| known_by_n.contains(message));
+                            .collect();
 
-                        eprintln!("notify of {}/{}", notify_of.len(), self.messages.len());
+                        if !notify_of.is_empty() {
+                            eprintln!("notify of {}/{}", notify_of.len(), self.messages.len());
 
-                        // if we know that n knows m, then we don't tell n that _we_ know m so
-                        // n will send us m in perpetuity, so we  include a couple of extra m's
-                        // so that they gradually know all the things that we know without sending
-                        // lots of extra stuff each time
-                        // we cap the number of extra `m`s we include to be at most 10% of the
-                        // number of `m`s we have to include to avoid excessive overhead
-                        let additional_cap = (notify_of.len() / 10) as u32;
-
-                        notify_of.extend(already_known_by_n.iter().filter(|_| {
-                            rand::random_ratio(
-                                additional_cap.min(already_known_by_n.len() as u32),
-                                already_known_by_n.len() as u32,
-                            )
-                        }));
-
-                        Message {
-                            src: self.node_id.clone(),
-                            dst: n.clone(),
-                            body: Body {
-                                msg_id: None,
-                                in_reply_to: None,
-                                payload: BroadcastPayload::Gossip { seen: notify_of },
-                            },
+                            Message {
+                                src: self.node_id.clone(),
+                                dst: n.clone(),
+                                body: Body {
+                                    msg_id: Some(self.msg_id),
+                                    in_reply_to: None,
+                                    payload: BroadcastPayload::Gossip { seen: notify_of },
+                                },
+                            }
+                            .send(output, &mut self.msg_id)
+                            .with_context(|| format!("gossip to {}", n))?;
+                            self.msg_id += 1;
                         }
-                        .send(output)
-                        .with_context(|| format!("gossip to {}", n))?;
-                        self.msg_id += 1;
                     }
                 }
             },
             Event::Message(message) => {
-                let mut reply = message.into_reply(Some(&mut self.msg_id));
+                let mut reply = message.into_reply(&self.msg_id);
                 match reply.body.payload {
                     BroadcastPayload::Gossip { seen } => {
                         self.known
@@ -145,14 +132,18 @@ impl Node<(), BroadcastPayload, InjectedPayload> for BroadcastNode {
                         self.messages.insert(message);
 
                         reply.body.payload = BroadcastPayload::BroadcastOk;
-                        reply.send(output).context("reply to broadcast")?;
+                        reply
+                            .send(output, &mut self.msg_id)
+                            .context("reply to broadcast")?;
                     }
 
                     BroadcastPayload::Read => {
                         reply.body.payload = BroadcastPayload::ReadOk {
                             messages: self.messages.clone(),
                         };
-                        reply.send(output).context("reply to read")?;
+                        reply
+                            .send(output, &mut self.msg_id)
+                            .context("reply to read")?;
                     }
 
                     BroadcastPayload::Topology { mut topology } => {
@@ -161,7 +152,9 @@ impl Node<(), BroadcastPayload, InjectedPayload> for BroadcastNode {
                         });
 
                         reply.body.payload = BroadcastPayload::TopologyOk;
-                        reply.send(output).context("reply to topology")?;
+                        reply
+                            .send(output, &mut self.msg_id)
+                            .context("reply to topology")?;
                     }
                     BroadcastPayload::BroadcastOk
                     | BroadcastPayload::ReadOk { .. }

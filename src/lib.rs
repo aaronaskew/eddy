@@ -11,28 +11,26 @@ pub struct Message<Payload> {
 }
 
 impl<Payload> Message<Payload> {
-    pub fn into_reply(self, msg_id: Option<&mut usize>) -> Self {
+    pub fn into_reply(self, msg_id: &usize) -> Self {
         Self {
             src: self.dst,
             dst: self.src,
             body: Body {
-                msg_id: msg_id.map(|id| {
-                    let mid = *id;
-                    *id += 1;
-                    mid
-                }),
+                msg_id: Some(*msg_id),
                 in_reply_to: self.body.msg_id,
                 payload: self.body.payload,
             },
         }
     }
 
-    pub fn send(&self, output: &mut impl Write) -> anyhow::Result<()>
+    pub fn send(&self, output: &mut impl Write, msg_id: &mut usize) -> anyhow::Result<()>
     where
         Payload: Serialize,
     {
         serde_json::to_writer(&mut *output, self).context("serialize response message")?;
         output.write_all(b"\n").context("trailing newline")?;
+
+        *msg_id += 1;
 
         Ok(())
     }
