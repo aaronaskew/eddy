@@ -1,6 +1,7 @@
 use eddy::*;
 
 use anyhow::Context;
+use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeSet, HashMap},
@@ -8,7 +9,8 @@ use std::{
     time::Duration,
 };
 
-const GOSSIP_SLEEP_MS: u64 = 300;
+const GOSSIP_SLEEP_MS: u64 = 50;
+const NUM_GOSSIP_RECEIVERS: usize = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -27,7 +29,10 @@ enum BroadcastPayload {
     },
     TopologyOk,
     Gossip {
-        seen: BTreeSet<usize>,
+        unseen_by_receiver: BTreeSet<usize>,
+    },
+    GossipOk {
+        received: BTreeSet<usize>,
     },
 }
 
@@ -38,10 +43,11 @@ enum InjectedPayload {
 #[derive(Debug)]
 struct BroadcastNode {
     node_id: String,
-    _node_ids: Vec<String>,
+    node_ids: Vec<String>,
     msg_id: usize,
     messages: BTreeSet<usize>,
     known: HashMap<String, BTreeSet<usize>>,
+    topology: HashMap<String, Vec<String>>,
     neighborhood: Vec<String>,
 }
 
@@ -68,7 +74,7 @@ impl Node<(), BroadcastPayload, InjectedPayload> for BroadcastNode {
 
         Ok(Self {
             node_id: init.node_id,
-            _node_ids: init.node_ids.clone(),
+            node_ids: init.node_ids.clone(),
             msg_id: 1,
             messages: BTreeSet::new(),
             known: init
@@ -76,6 +82,7 @@ impl Node<(), BroadcastPayload, InjectedPayload> for BroadcastNode {
                 .into_iter()
                 .map(|node_id| (node_id, BTreeSet::new()))
                 .collect(),
+            topology: HashMap::new(),
             neighborhood: vec![],
         })
     }
@@ -89,18 +96,24 @@ impl Node<(), BroadcastPayload, InjectedPayload> for BroadcastNode {
             Event::EOF => {}
             Event::Injected(payload) => match payload {
                 InjectedPayload::Gossip => {
-                    for n in &self.neighborhood {
-                        let known_by_n = &self.known[n];
+                    let rng = &mut rand::rng();
 
-                        let notify_of: BTreeSet<_> = self
+                    for n in self.neighborhood.sample(rng, NUM_GOSSIP_RECEIVERS) {
+                        let known_by_receiver = &self.known[n];
+
+                        let unseen_by_receiver: BTreeSet<_> = self
                             .messages
                             .iter()
-                            .filter(|m| !known_by_n.contains(m))
+                            .filter(|m| !known_by_receiver.contains(m))
                             .copied()
                             .collect();
 
-                        if !notify_of.is_empty() {
-                            eprintln!("notify of {}/{}", notify_of.len(), self.messages.len());
+                        if !unseen_by_receiver.is_empty() {
+                            eprintln!(
+                                "notify of {}/{}",
+                                unseen_by_receiver.len(),
+                                self.messages.len()
+                            );
 
                             Message {
                                 src: self.node_id.clone(),
@@ -108,12 +121,13 @@ impl Node<(), BroadcastPayload, InjectedPayload> for BroadcastNode {
                                 body: Body {
                                     msg_id: Some(self.msg_id),
                                     in_reply_to: None,
-                                    payload: BroadcastPayload::Gossip { seen: notify_of },
+                                    payload: BroadcastPayload::Gossip { unseen_by_receiver },
                                 },
                             }
                             .send(output, &mut self.msg_id)
                             .with_context(|| format!("gossip to {}", n))?;
-                            self.msg_id += 1;
+
+                            eprintln!("sent gossip to {}", n);
                         }
                     }
                 }
@@ -121,12 +135,25 @@ impl Node<(), BroadcastPayload, InjectedPayload> for BroadcastNode {
             Event::Message(message) => {
                 let mut reply = message.into_reply(&self.msg_id);
                 match reply.body.payload {
-                    BroadcastPayload::Gossip { seen } => {
+                    BroadcastPayload::Gossip { unseen_by_receiver } => {
                         self.known
                             .get_mut(&reply.dst)
                             .expect("got gossip from unknown node")
-                            .extend(seen.iter().copied());
-                        self.messages.extend(seen);
+                            .extend(unseen_by_receiver.iter().copied());
+                        self.messages.extend(unseen_by_receiver.iter().copied());
+
+                        reply.body.payload = BroadcastPayload::GossipOk {
+                            received: unseen_by_receiver,
+                        };
+                        reply
+                            .send(output, &mut self.msg_id)
+                            .context("reply to gossip")?;
+                    }
+                    BroadcastPayload::GossipOk { received } => {
+                        self.known
+                            .get_mut(&reply.dst)
+                            .expect("got gossip_ok from unknown node")
+                            .extend(received.iter().copied());
                     }
                     BroadcastPayload::Broadcast { message } => {
                         self.messages.insert(message);
@@ -146,10 +173,22 @@ impl Node<(), BroadcastPayload, InjectedPayload> for BroadcastNode {
                             .context("reply to read")?;
                     }
 
-                    BroadcastPayload::Topology { mut topology } => {
-                        self.neighborhood = topology.remove(&self.node_id).unwrap_or_else(|| {
-                            panic!("no toplogy given for node {}", self.node_id)
-                        });
+                    BroadcastPayload::Topology { topology } => {
+                        self.topology = topology;
+
+                        // Neighborhood is all other nodes
+                        self.neighborhood = self
+                            .node_ids
+                            .iter()
+                            .filter(|n| n != &&self.node_id)
+                            .cloned()
+                            .collect();
+
+                        eprintln!(
+                            "neighborhood: len: {} nodes: {:?}",
+                            self.neighborhood.len(),
+                            self.neighborhood
+                        );
 
                         reply.body.payload = BroadcastPayload::TopologyOk;
                         reply

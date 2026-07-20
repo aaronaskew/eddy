@@ -117,7 +117,7 @@ where
         },
     };
 
-    serde_json::to_writer(&mut stdout, &reply).context("serialize response to generate")?;
+    serde_json::to_writer(&mut stdout, &reply).context("serialize response to init")?;
     stdout.write_all(b"\n").context("add newline")?;
 
     drop(stdin);
