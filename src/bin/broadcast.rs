@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-const GOSSIP_SLEEP_MS: u64 = 50;
+const GOSSIP_SLEEP_MS: u64 = 100;
 const NUM_GOSSIP_RECEIVERS: usize = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +33,7 @@ enum BroadcastPayload {
     },
     GossipOk {
         received: BTreeSet<usize>,
+        unseen_by_sender: BTreeSet<usize>,
     },
 }
 
@@ -142,18 +143,37 @@ impl Node<(), BroadcastPayload, InjectedPayload> for BroadcastNode {
                             .extend(unseen_by_receiver.iter().copied());
                         self.messages.extend(unseen_by_receiver.iter().copied());
 
+                        let unseen_by_sender = self
+                            .messages
+                            .iter()
+                            .filter(|m| {
+                                !self
+                                    .known
+                                    .get(&reply.dst)
+                                    .expect("sender should be known")
+                                    .contains(m)
+                            })
+                            .copied()
+                            .collect();
+
                         reply.body.payload = BroadcastPayload::GossipOk {
                             received: unseen_by_receiver,
+                            unseen_by_sender,
                         };
                         reply
                             .send(output, &mut self.msg_id)
                             .context("reply to gossip")?;
                     }
-                    BroadcastPayload::GossipOk { received } => {
+                    BroadcastPayload::GossipOk {
+                        received,
+                        unseen_by_sender,
+                    } => {
                         self.known
                             .get_mut(&reply.dst)
                             .expect("got gossip_ok from unknown node")
                             .extend(received.iter().copied());
+
+                        self.messages.extend(unseen_by_sender);
                     }
                     BroadcastPayload::Broadcast { message } => {
                         self.messages.insert(message);
