@@ -8,6 +8,9 @@ use std::{
     time::Duration,
 };
 
+const ADDITIONAL_MSG_PERCENTAGE: f32 = 1.0;
+const GOSSIP_SLEEP_MS: u64 = 300;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
@@ -36,6 +39,7 @@ enum InjectedPayload {
 #[derive(Debug)]
 struct BroadcastNode {
     node_id: String,
+    node_ids: Vec<String>,
     msg_id: usize,
     messages: BTreeSet<usize>,
     known: HashMap<String, BTreeSet<usize>>,
@@ -53,7 +57,7 @@ impl Node<(), BroadcastPayload, InjectedPayload> for BroadcastNode {
             // generate gossip events
             // TODO: handle EOF signal
             loop {
-                std::thread::sleep(Duration::from_millis(300));
+                std::thread::sleep(Duration::from_millis(GOSSIP_SLEEP_MS));
                 if gossip_tx
                     .send(Event::Injected(InjectedPayload::Gossip))
                     .is_err()
@@ -65,6 +69,7 @@ impl Node<(), BroadcastPayload, InjectedPayload> for BroadcastNode {
 
         Ok(Self {
             node_id: init.node_id,
+            node_ids: init.node_ids.clone(),
             msg_id: 1,
             messages: BTreeSet::new(),
             known: init
