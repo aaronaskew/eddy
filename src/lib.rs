@@ -23,14 +23,19 @@ impl<Payload> Message<Payload> {
         }
     }
 
-    pub fn send(&self, output: &mut impl Write, msg_id: &mut usize) -> anyhow::Result<()>
+    pub fn send(&mut self, output: &mut impl Write, msg_id: &mut usize) -> anyhow::Result<()>
     where
         Payload: Serialize,
     {
-        serde_json::to_writer(&mut *output, self).context("serialize response message")?;
+        let json = serde_json::to_string(self).context("serialize response message")?;
+        output.write_all(json.as_bytes()).context("sending json")?;
         output.write_all(b"\n").context("trailing newline")?;
 
         *msg_id += 1;
+
+        self.body.msg_id = Some(*msg_id);
+
+        eprintln!("sent: {}", json);
 
         Ok(())
     }
@@ -93,13 +98,15 @@ where
     let mut stdin = stdin.lines();
     let mut stdout = std::io::stdout().lock();
 
-    let init_msg: Message<InitPayload> = serde_json::from_str(
-        &stdin
-            .next()
-            .expect("no init message received")
-            .context("failed to read init message from stdin")?,
-    )
-    .context("init message could not be deserialized")?;
+    let json = &stdin
+        .next()
+        .expect("no init message received")
+        .context("failed to read init message from stdin")?;
+
+    eprintln!("received: {}", serde_json::to_string_pretty(json)?);
+
+    let init_msg: Message<InitPayload> =
+        serde_json::from_str(json).context("init message could not be deserialized")?;
 
     let InitPayload::Init(init) = init_msg.body.payload else {
         panic!("first message should be init")
@@ -125,6 +132,9 @@ where
         let stdin = std::io::stdin().lock();
         for line in stdin.lines() {
             let line = line.context("Maelstrom input from STDIN could not be read")?;
+
+            eprintln!("received: {}", serde_json::to_string_pretty(&line)?);
+
             let input: Message<P> = serde_json::from_str(&line)
                 .context("Maelstrom input from STDIN could not be deserialized")?;
 
